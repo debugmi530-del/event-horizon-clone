@@ -44,20 +44,22 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Show Android SDK info
+      - name: Show Android SDK
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME"
+          ls $ANDROID_HOME/platforms/ | tail -3
           ls $ANDROID_HOME/build-tools/ | tail -3
-          ls $ANDROID_HOME/platforms/ | tail -5
 
-      - name: Install Gradle wrapper jar
+      - name: Get Gradle wrapper jar from Gradle release
         working-directory: android
         run: |
           mkdir -p gradle/wrapper
-          curl -sL "https://repo1.maven.org/maven2/org/gradle/gradle-wrapper/8.5/gradle-wrapper-8.5.jar" \
-            -o gradle/wrapper/gradle-wrapper.jar 2>/dev/null || \
-          curl -sL "https://github.com/gradle/gradle/raw/v8.5.0/gradle/wrapper/gradle-wrapper.jar" \
+          # Use Gradle 8.5 wrapper jar from Gradle's own GitHub release
+          curl -sL \
+            "https://github.com/gradle/gradle/raw/refs/tags/v8.5.0/gradle/wrapper/gradle-wrapper.jar" \
             -o gradle/wrapper/gradle-wrapper.jar
+          # Verify it's a proper jar (zip file)
+          file gradle/wrapper/gradle-wrapper.jar
           ls -lh gradle/wrapper/
 
       - name: Make gradlew executable
@@ -65,12 +67,12 @@ jobs:
 
       - name: Build Debug APK
         working-directory: android
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
+        run: |
+          ./gradlew assembleDebug --no-daemon --stacktrace 2>&1
         env:
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
-          JAVA_HOME: ${{ env.JAVA_HOME }}
 
-      - name: Find APK
+      - name: List built APKs
         run: find android -name "*.apk" -ls
 
       - name: Upload APK
