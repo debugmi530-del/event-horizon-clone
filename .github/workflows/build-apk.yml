@@ -44,22 +44,26 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Show Android SDK
+      - name: Unify Android SDK env vars
         run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          ls $ANDROID_HOME/platforms/ | tail -3
-          ls $ANDROID_HOME/build-tools/ | tail -3
+          # GitHub runners have ANDROID_SDK_ROOT but Gradle may also look for ANDROID_HOME
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}" >> $GITHUB_ENV
+          echo "ANDROID_HOME=${ANDROID_SDK_ROOT}" >> $GITHUB_ENV
+          echo "SDK is at: $ANDROID_SDK_ROOT"
+          ls "$ANDROID_SDK_ROOT/platforms/" | tail -3
+          ls "$ANDROID_SDK_ROOT/build-tools/" | tail -3
 
-      - name: Get Gradle wrapper jar from Gradle release
+      - name: Get Gradle wrapper jar
         working-directory: android
         run: |
           mkdir -p gradle/wrapper
-          # Use Gradle 8.5 wrapper jar from Gradle's own GitHub release
+          # Download wrapper jar from Gradle's GitHub release tag
+          GRADLE_VER=8.5
           curl -sL \
-            "https://github.com/gradle/gradle/raw/refs/tags/v8.5.0/gradle/wrapper/gradle-wrapper.jar" \
+            "https://github.com/gradle/gradle/raw/v${GRADLE_VER}.0/gradle/wrapper/gradle-wrapper.jar" \
             -o gradle/wrapper/gradle-wrapper.jar
-          # Verify it's a proper jar (zip file)
-          file gradle/wrapper/gradle-wrapper.jar
+          # Verify it's a real JAR (zip magic bytes)
+          hexdump -C gradle/wrapper/gradle-wrapper.jar | head -2
           ls -lh gradle/wrapper/
 
       - name: Make gradlew executable
@@ -67,10 +71,10 @@ jobs:
 
       - name: Build Debug APK
         working-directory: android
-        run: |
-          ./gradlew assembleDebug --no-daemon --stacktrace 2>&1
+        run: ./gradlew assembleDebug --no-daemon --stacktrace 2>&1
         env:
-          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
+          ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
 
       - name: List built APKs
         run: find android -name "*.apk" -ls
