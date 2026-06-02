@@ -38,23 +38,23 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
-        with:
-          api-level: 34
-          build-tools: '34.0.0'
 
-      - name: Make gradlew executable
-        run: chmod +x android/gradlew
+      - name: Install Gradle 8.5
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.5'
 
       - name: Build Debug APK
+        working-directory: android
         run: |
-          cd android
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          gradle assembleDebug --no-daemon --stacktrace
         env:
-          GRADLE_OPTS: "-Dorg.gradle.daemon=false -Xmx2g"
+          ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
+          GRADLE_OPTS: "-Dorg.gradle.daemon=false"
 
-      - name: Upload APK artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: event-horizon-clone-debug-apk
+          name: event-horizon-clone-debug
           path: android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 30
