@@ -1,4 +1,6 @@
 import { getWeaponById } from '../data/weapons';
+import { ShipRenderer } from '../utils/ShipRenderer';
+import { EngineTrail } from '../systems/EngineTrail';
 
 export class ShipEntity {
   constructor(scene, config) {
@@ -9,7 +11,6 @@ export class ShipEntity {
     const data = config.isPlayer ? config.shipData : null;
     const eData = config.enemyData;
 
-    // Параметры корабля
     if (this.isPlayer && data) {
       this.hp = data.baseHp;
       this.maxHp = data.baseHp;
@@ -20,68 +21,95 @@ export class ShipEntity {
       this.maxEnergy = data.baseEnergy;
       this.energyRegen = data.energyRegen;
       this.color = data.color;
+      this.faction = data.faction;
+      this.tier = data.tier;
       this.weapons = config.weapons || [];
+      this.shipData = data;
     } else if (eData) {
       this.hp = eData.hp;
       this.maxHp = eData.hp;
       this.shield = eData.shield || 0;
       this.maxShield = eData.shield || 0;
       this.speed = eData.speed;
-      this.energy = 999;
-      this.maxEnergy = 999;
+      this.energy = 9999;
+      this.maxEnergy = 9999;
       this.energyRegen = 0;
       this.color = eData.color || 0xff4444;
+      this.enemyData = eData;
       this.weapons = eData.weapons?.map(id => getWeaponById(id)).filter(Boolean) || [];
     }
 
     this.fireCooldowns = {};
     this.shieldRechargeTimer = 0;
+    this.isInvincible = false;
+    this.damageFlashTimer = 0;
+    this._currentSpeed = 0;
 
-    // Создаём спрайт как геометрию
-    this.sprite = this._createShapeSprite(scene, config.x, config.y, config.isPlayer, config.enemyData);
+    this.sprite = this._createSprite(scene, config.x, config.y, eData);
     this.sprite.setData('entity', this);
+
+    // Щит-пузырь
+    this._createShieldBubble(scene);
+
+    // Двигательный шлейф
+    this._createEngineTrail(scene, eData);
+
+    // HP-бар над врагом
+    if (!this.isPlayer) {
+      this._createEnemyBar(scene);
+    }
   }
 
-  _createShapeSprite(scene, x, y, isPlayer, eData) {
-    // Рисуем корабль на текстуре
-    const key = isPlayer ? 'player_ship' : `enemy_${eData?.id || 'default'}`;
+  _createSprite(scene, x, y, eData) {
+    const faction = eData ? ShipRenderer.getEnemyFaction(eData.id) : this.faction;
+    const key = this.isPlayer
+      ? `ship_player_f${this.faction}_t${this.tier}`
+      : `ship_enemy_${eData.id}`;
 
-    if (!scene.textures.exists(key)) {
-      const g = scene.make.graphics({ x: 0, y: 0, add: false });
-      const col = isPlayer ? 0x4488ff : (eData?.color || 0xff4444);
-      const scale = eData?.scale || 1.0;
-      const s = Math.round(28 * scale);
-
-      // Корпус
-      g.fillStyle(col, 1.0);
-      g.fillTriangle(s/2, 0, 0, s, s, s);
-      // Кабина
-      g.fillStyle(0xffffff, 0.5);
-      g.fillTriangle(s/2, s*0.1, s*0.3, s*0.5, s*0.7, s*0.5);
-      // Двигатель
-      g.fillStyle(0xff8800, 0.8);
-      g.fillRect(s*0.3, s*0.85, s*0.15, s*0.15);
-      g.fillRect(s*0.55, s*0.85, s*0.15, s*0.15);
-
-      g.generateTexture(key, s, s);
-      g.destroy();
-    }
+    ShipRenderer.createTexture(scene, key, {
+      faction,
+      tier: this.isPlayer ? this.tier : (eData?.tier || 1),
+      isPlayer: this.isPlayer,
+      color: this.color,
+      scale: eData?.scale || 1.0
+    });
 
     const spr = scene.physics.add.image(x, y, key);
-    spr.setDragX(200).setDragY(200);
-
-    // Щит-эффект
-    if (this.maxShield > 0) {
-      this.shieldSprite = scene.add.image(x, y, 'fx_shield').setScale(0.6).setAlpha(0);
-    }
-
-    // Двигательный след
-    this.trailGraphics = scene.add.graphics();
-
+    spr.setDragX(180).setDragY(180);
+    spr.setMaxVelocity(this.speed * 1.2, this.speed * 1.2);
+    spr.setDepth(10);
     return spr;
   }
 
-  update(delta) {
+  _createShieldBubble(scene) {
+    if (this.maxShield <= 0) return;
+    const sz = (this.sprite.width + this.sprite.height) * 0.62;
+    this.shieldBubble = scene.add.graphics().setDepth(9);
+    this.shieldAlpha = 0;
+  }
+
+  _createEngineTrail(scene, eData) {
+    const scale = eData?.scale || 1.0;
+    const h = this.sprite.height;
+    const trailColor = this.isPlayer ? 0x4488ff : (eData?.color || 0xff4444);
+    const offsets = this.isPlayer
+      ? [{ x: -6, y: h * 0.45 }, { x: 6, y: h * 0.45 }]
+      : [{ x: 0, y: h * 0.4 }];
+
+    this.trail = new EngineTrail(scene, {
+      color: trailColor,
+      maxLen: this.isPlayer ? 22 : 14,
+      offsets
+    });
+  }
+
+  _createEnemyBar(scene) {
+    this.hpBarGfx = scene.add.graphics().setDepth(20);
+  }
+
+  update(delta, targetX, targetY) {
+    if (!this.sprite.active) return;
+
     // Регенерация энергии
     if (this.energyRegen > 0) {
       this.energy = Math.min(this.energy + this.energyRegen * delta / 1000, this.maxEnergy);
@@ -91,18 +119,66 @@ export class ShipEntity {
     if (this.maxShield > 0 && this.shield < this.maxShield) {
       this.shieldRechargeTimer -= delta;
       if (this.shieldRechargeTimer <= 0) {
-        this.shield = Math.min(this.shield + 5 * delta / 1000, this.maxShield);
+        this.shield = Math.min(this.shield + 8 * delta / 1000, this.maxShield);
       }
     }
 
-    // Обновляем позицию щита и следа
-    if (this.shieldSprite) {
-      this.shieldSprite.setPosition(this.sprite.x, this.sprite.y);
-      this.shieldSprite.setAlpha(this.shield > 0 ? 0.4 : 0);
-    }
+    // Угол для трейла
+    const vx = this.sprite.body?.velocity?.x || 0;
+    const vy = this.sprite.body?.velocity?.y || 0;
+    this._currentSpeed = Math.sqrt(vx * vx + vy * vy);
+    const angle = this.sprite.rotation - Math.PI / 2;
 
-    // Движение
+    this.trail.update(this.sprite.x, this.sprite.y, angle, this._currentSpeed);
+
+    // Щит-пузырь
+    this._updateShieldBubble();
+
+    // HP-бар врага
+    if (this.hpBarGfx) this._drawEnemyBar();
+
+    // Мигание при уроне
+    if (this.damageFlashTimer > 0) {
+      this.damageFlashTimer -= delta;
+      if (this.damageFlashTimer <= 0) this.sprite.setTint(0xffffff);
+    }
+  }
+
+  _updateShieldBubble() {
+    if (!this.shieldBubble) return;
+    if (this.shieldAlpha > 0) {
+      this.shieldAlpha = Math.max(0, this.shieldAlpha - 0.04);
+    }
+    this.shieldBubble.clear();
+    if (this.shieldAlpha < 0.01) return;
+
+    const r = (this.sprite.width + this.sprite.height) * 0.34;
+    const pct = this.shield / Math.max(this.maxShield, 1);
+    const col = pct > 0.5 ? 0x4488ff : pct > 0.2 ? 0xaaff44 : 0xff4444;
+
+    this.shieldBubble.setPosition(this.sprite.x - r, this.sprite.y - r);
+    this.shieldBubble.lineStyle(2, col, this.shieldAlpha * 0.9);
+    this.shieldBubble.strokeCircle(r, r, r);
+    this.shieldBubble.lineStyle(4, col, this.shieldAlpha * 0.3);
+    this.shieldBubble.strokeCircle(r, r, r * 1.06);
+  }
+
+  _drawEnemyBar() {
     if (!this.sprite.active) return;
+    const x = this.sprite.x - 18, y = this.sprite.y - this.sprite.height * 0.6 - 8;
+    const w = 36, h = 4;
+    const pct = Math.max(0, this.hp / this.maxHp);
+    const col = pct > 0.6 ? 0x44ff44 : pct > 0.3 ? 0xffff44 : 0xff4444;
+
+    this.hpBarGfx.clear();
+    this.hpBarGfx.fillStyle(0x000000, 0.6).fillRect(x, y, w, h);
+    this.hpBarGfx.fillStyle(col, 1).fillRect(x, y, w * pct, h);
+
+    if (this.maxShield > 0) {
+      const sp = Math.max(0, this.shield / this.maxShield);
+      this.hpBarGfx.fillStyle(0x000000, 0.5).fillRect(x, y - 5, w, 3);
+      this.hpBarGfx.fillStyle(0x4488ff, 1).fillRect(x, y - 5, w * sp, 3);
+    }
   }
 
   tryFire(time, target) {
@@ -111,91 +187,127 @@ export class ShipEntity {
       if (!w) continue;
       const cd = this.fireCooldowns[w.id] || 0;
       if (time < cd) continue;
-      if (this.energy < w.energyCost) continue;
+      if (this.energy < (w.energyCost || 0)) continue;
 
-      this.energy -= w.energyCost;
+      this.energy -= w.energyCost || 0;
       this.fireCooldowns[w.id] = time + 1000 / w.fireRate;
-
-      this._spawnBullet(w, target, i);
+      this._spawnBullets(w, target, i);
     }
   }
 
-  _spawnBullet(weapon, target, weaponIndex) {
+  _spawnBullets(weapon, target, weaponIndex) {
     const spr = this.sprite;
     const angle = Phaser.Math.Angle.Between(spr.x, spr.y, target.x, target.y);
-    const offsetX = Math.cos(angle) * 20;
-    const offsetY = Math.sin(angle) * 20;
 
-    const spread = weapon.spread ? Phaser.Math.FloatBetween(-0.15, 0.15) : 0;
-    const finalAngle = angle + spread;
-
-    // Спред для дробовика
+    // Точки выхода снарядов — чередуем для нескольких орудий
     const count = weapon.spread ? weapon.spread : 1;
+    const offsets = weaponIndex % 2 === 0
+      ? [{ x: -6, y: -10 }, { x: 6, y: -10 }]
+      : [{ x: 0, y: -12 }];
+
     for (let i = 0; i < count; i++) {
-      const spreadAngle = weapon.spread ? finalAngle + Phaser.Math.FloatBetween(-0.3, 0.3) : finalAngle;
-      const bx = spr.x + offsetX, by = spr.y + offsetY;
+      const spreadAngle = angle + (weapon.spread ? Phaser.Math.FloatBetween(-0.28, 0.28) : 0);
+      const off = offsets[i % offsets.length];
 
-      let bullet;
-      if (this.scene.textures.exists(weapon.bulletKey)) {
-        bullet = this.bulletGroup.create(bx, by, weapon.bulletKey);
-        bullet.setScale(weapon.bulletScale || 0.5);
-      } else {
-        // Fallback: цветной кружок
-        const bKey = `bullet_fallback_${weapon.id}`;
-        if (!this.scene.textures.exists(bKey)) {
-          const bg = this.scene.make.graphics({ add: false });
-          bg.fillStyle(weapon.color || 0xffffff).fillCircle(4, 4, 4);
-          bg.generateTexture(bKey, 8, 8); bg.destroy();
-        }
-        bullet = this.bulletGroup.create(bx, by, bKey);
-      }
+      // Вращаем смещение по повороту корабля
+      const rot = spr.rotation;
+      const cos = Math.cos(rot), sin = Math.sin(rot);
+      const ox = off.x * cos - off.y * sin;
+      const oy = off.x * sin + off.y * cos;
 
+      const bx = spr.x + ox;
+      const by = spr.y + oy;
+
+      let bullet = this.bulletGroup.create(bx, by, this._getBulletKey(weapon));
       if (!bullet) continue;
+
+      bullet.setScale(weapon.bulletScale || 0.5);
+      bullet.setDepth(8);
       bullet.setData('weapon', weapon);
       bullet.setData('shooter', this);
-      bullet.setVelocity(Math.cos(spreadAngle) * weapon.bulletSpeed, Math.sin(spreadAngle) * weapon.bulletSpeed);
+      bullet.setData('angle', spreadAngle);
+      bullet.setVelocity(
+        Math.cos(spreadAngle) * weapon.bulletSpeed,
+        Math.sin(spreadAngle) * weapon.bulletSpeed
+      );
       bullet.setRotation(spreadAngle + Math.PI / 2);
 
+      // Тинт пули под цвет оружия
+      if (weapon.color) bullet.setTint(weapon.color);
+
       // Самонаведение
-      if (weapon.homing && !this.isPlayer) {
-        this.scene.time.addEvent({ delay: 100, repeat: 10, callback: () => {
-          if (!bullet.active) return;
-          const px = this.scene.player?.sprite?.x, py = this.scene.player?.sprite?.y;
-          if (px == null) return;
-          const a = Phaser.Math.Angle.Between(bullet.x, bullet.y, px, py);
-          const spd = weapon.bulletSpeed;
-          bullet.setVelocity(Math.cos(a) * spd, Math.sin(a) * spd);
+      if (weapon.homing && this.scene.player) {
+        this.scene.time.addEvent({ delay: 80, repeat: 15, callback: () => {
+          if (!bullet?.active) return;
+          const tgt = this.isPlayer ? null : this.scene.player?.sprite;
+          if (!tgt?.active) return;
+          const a = Phaser.Math.Angle.Between(bullet.x, bullet.y, tgt.x, tgt.y);
+          const cr = Math.atan2(bullet.body.velocity.y, bullet.body.velocity.x);
+          const da = Phaser.Math.Angle.Wrap(a - cr);
+          const turn = Phaser.Math.Clamp(da, -0.12, 0.12);
+          const na = cr + turn;
+          bullet.setVelocity(Math.cos(na) * weapon.bulletSpeed, Math.sin(na) * weapon.bulletSpeed);
+          bullet.setRotation(na + Math.PI / 2);
         }});
       }
 
-      // Уничтожаем снаряд через время
-      this.scene.time.delayedCall(weapon.range / weapon.bulletSpeed * 1000 + 200, () => {
-        if (bullet.active) bullet.destroy();
-      });
+      // Уничтожаем по дальности
+      const lifetime = (weapon.range / weapon.bulletSpeed) * 1000 + 150;
+      this.scene.time.delayedCall(lifetime, () => { if (bullet?.active) bullet.destroy(); });
     }
   }
 
-  takeDamage(dmg) {
-    // Сначала щит принимает урон
+  _getBulletKey(weapon) {
+    if (this.scene.textures.exists(weapon.bulletKey)) return weapon.bulletKey;
+    const fbKey = `fb_${weapon.id}`;
+    if (!this.scene.textures.exists(fbKey)) {
+      const g = this.scene.make.graphics({ add: false });
+      const col = weapon.color || 0xffffff;
+      g.fillStyle(col, 1).fillCircle(4, 8, 3);
+      g.fillStyle(0xffffff, 0.6).fillCircle(4, 4, 2);
+      g.generateTexture(fbKey, 8, 14);
+      g.destroy();
+    }
+    return fbKey;
+  }
+
+  takeDamage(dmg, hitX, hitY) {
+    if (this.isInvincible) return;
+
+    // Щит поглощает первым
     if (this.shield > 0) {
       const absorbed = Math.min(this.shield, dmg);
       this.shield -= absorbed;
       dmg -= absorbed;
-      this.shieldRechargeTimer = 3000; // 3 секунды до перезарядки
-      if (this.shieldSprite) {
-        this.scene.tweens.add({ targets: this.shieldSprite, alpha: { from: 0.8, to: 0 }, duration: 300 });
+      this.shieldRechargeTimer = 3500;
+      this.shieldAlpha = 1.0;
+
+      if (this.shieldBubble) {
+        // Вспышка щита
+        this.scene.tweens.add({
+          targets: this, shieldAlpha: { from: 1, to: 0 },
+          duration: 600, ease: 'Power2'
+        });
       }
     }
+
     if (dmg > 0) {
       this.hp -= dmg;
-      // Мигание при уроне
-      this.scene.tweens.add({ targets: this.sprite, alpha: { from: 0.3, to: 1 }, duration: 200 });
+      // Красная вспышка
+      this.sprite.setTint(0xff4444);
+      this.damageFlashTimer = 160;
+
+      // Числа урона
+      if (this.scene._showDamageNumber) {
+        this.scene._showDamageNumber(hitX || this.sprite.x, hitY || this.sprite.y, Math.round(dmg));
+      }
     }
   }
 
   destroy() {
-    if (this.shieldSprite) this.shieldSprite.destroy();
-    if (this.trailGraphics) this.trailGraphics.destroy();
+    if (this.trail) this.trail.destroy();
+    if (this.shieldBubble) this.shieldBubble.destroy();
+    if (this.hpBarGfx) this.hpBarGfx.destroy();
     if (this.sprite?.active) this.sprite.destroy();
   }
 }
