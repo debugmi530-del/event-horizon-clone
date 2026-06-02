@@ -1,5 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
-<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-    <background android:drawable="@android:color/black"/>
-    <foreground android:drawable="@android:color/white"/>
-</adaptive-icon>
+<bitmap xmlns:android="http://schemas.android.com/apk/res/android"
+    android:src="@android:drawable/star_big_on"
+    android:tint="#6644AA" />
