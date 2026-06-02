@@ -44,24 +44,19 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Check Android SDK on runner
+      - name: Show Android SDK info
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-          ls $ANDROID_HOME/build-tools/ || echo "no build-tools"
-          ls $ANDROID_HOME/platforms/ | head -5 || echo "no platforms"
-
-      - name: Install missing SDK components
-        run: |
-          yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager "platforms;android-34" "build-tools;34.0.0" > /dev/null 2>&1
+          ls $ANDROID_HOME/build-tools/ | tail -3
+          ls $ANDROID_HOME/platforms/ | tail -5
 
       - name: Install Gradle wrapper jar
         working-directory: android
         run: |
           mkdir -p gradle/wrapper
-          # Download gradle-wrapper.jar from official repo
-          curl -sL https://raw.githubusercontent.com/gradle/gradle/v8.5.0/gradle/wrapper/gradle-wrapper.jar \
+          curl -sL "https://repo1.maven.org/maven2/org/gradle/gradle-wrapper/8.5/gradle-wrapper-8.5.jar" \
+            -o gradle/wrapper/gradle-wrapper.jar 2>/dev/null || \
+          curl -sL "https://github.com/gradle/gradle/raw/v8.5.0/gradle/wrapper/gradle-wrapper.jar" \
             -o gradle/wrapper/gradle-wrapper.jar
           ls -lh gradle/wrapper/
 
@@ -70,13 +65,12 @@ jobs:
 
       - name: Build Debug APK
         working-directory: android
-        run: |
-          ./gradlew assembleDebug --no-daemon --stacktrace 2>&1
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
         env:
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
           JAVA_HOME: ${{ env.JAVA_HOME }}
 
-      - name: Find APK files
+      - name: Find APK
         run: find android -name "*.apk" -ls
 
       - name: Upload APK
