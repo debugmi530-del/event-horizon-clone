@@ -11,133 +11,143 @@ export class AISystem {
     const player = this.scene.player;
     if (!player?.sprite?.active) return;
 
+    const px = player.sprite.x, py = player.sprite.y;
+
     this.enemies.forEach(enemy => {
       if (!enemy.sprite?.active) return;
       const data = enemy.sprite.getData('enemyData');
       const ai = data?.ai || 'aggressive';
 
       switch (ai) {
-        case 'aggressive': this._aggressiveAI(enemy, player, time, delta); break;
-        case 'swarm':      this._swarmAI(enemy, player, time, delta); break;
-        case 'tactical':   this._tacticalAI(enemy, player, time, delta); break;
-        case 'defensive':  this._defensiveAI(enemy, player, time, delta); break;
-        case 'boss':       this._bossAI(enemy, player, time, delta); break;
-        default:           this._aggressiveAI(enemy, player, time, delta);
+        case 'aggressive': this._aggressive(enemy, px, py, time); break;
+        case 'swarm':      this._swarm(enemy, px, py, time); break;
+        case 'tactical':   this._tactical(enemy, px, py, time); break;
+        case 'defensive':  this._defensive(enemy, px, py, time); break;
+        case 'boss':       this._boss(enemy, px, py, time, delta); break;
+        default:           this._aggressive(enemy, px, py, time);
       }
+
+      // Держим врагов в пределах экрана
+      this._clampEnemy(enemy);
     });
   }
 
-  _aggressiveAI(enemy, player, time, delta) {
-    const px = player.sprite.x, py = player.sprite.y;
+  _moveTowards(enemy, tx, ty, speedMult = 1.0) {
     const ex = enemy.sprite.x, ey = enemy.sprite.y;
-    const dist = Phaser.Math.Distance.Between(ex, ey, px, py);
-    const spd = enemy.speed;
+    const angle = Phaser.Math.Angle.Between(ex, ey, tx, ty);
+    const spd = enemy.speed * speedMult;
+    enemy.sprite.setVelocity(Math.cos(angle) * spd, Math.sin(angle) * spd);
+    // Плавный поворот
+    const targetRot = angle + Math.PI / 2;
+    enemy.sprite.rotation = Phaser.Math.Angle.RotateTo(enemy.sprite.rotation, targetRot, 0.12);
+  }
 
-    // Двигаемся к игроку
-    if (dist > 80) {
-      const angle = Phaser.Math.Angle.Between(ex, ey, px, py);
-      enemy.sprite.setVelocity(Math.cos(angle) * spd, Math.sin(angle) * spd);
-      enemy.sprite.rotation = angle + Math.PI / 2;
+  _lookAt(enemy, tx, ty) {
+    const angle = Phaser.Math.Angle.Between(enemy.sprite.x, enemy.sprite.y, tx, ty);
+    const targetRot = angle + Math.PI / 2;
+    enemy.sprite.rotation = Phaser.Math.Angle.RotateTo(enemy.sprite.rotation, targetRot, 0.1);
+  }
+
+  _aggressive(enemy, px, py, time) {
+    const dist = Phaser.Math.Distance.Between(enemy.sprite.x, enemy.sprite.y, px, py);
+
+    if (dist > 90) {
+      this._moveTowards(enemy, px, py, 1.0);
     } else {
-      enemy.sprite.setVelocity(0, 0);
+      // Рядом — немного отходит
+      const angle = Phaser.Math.Angle.Between(px, py, enemy.sprite.x, enemy.sprite.y);
+      enemy.sprite.setVelocity(Math.cos(angle) * enemy.speed * 0.4, Math.sin(angle) * enemy.speed * 0.4);
+      this._lookAt(enemy, px, py);
     }
 
-    // Стреляем
-    if (dist < 400) {
-      enemy.tryFire(time, { x: px, y: py });
-    }
+    if (dist < 420) enemy.tryFire(time, { x: px, y: py });
   }
 
-  _swarmAI(enemy, player, time, delta) {
-    const px = player.sprite.x, py = player.sprite.y;
+  _swarm(enemy, px, py, time) {
+    // Роение — кружим по орбите
     const ex = enemy.sprite.x, ey = enemy.sprite.y;
     const dist = Phaser.Math.Distance.Between(ex, ey, px, py);
-    const spd = enemy.speed;
+    const orbitR = 100 + (enemy._orbitOffset || 0);
+    if (!enemy._orbitOffset) enemy._orbitOffset = Phaser.Math.Between(-30, 30);
 
-    // Роение — кружим вокруг
-    const orbitRadius = 120;
-    const angle = Phaser.Math.Angle.Between(px, py, ex, ey);
-    const targetAngle = angle + 0.03;
-    const tx = px + Math.cos(targetAngle) * orbitRadius;
-    const ty = py + Math.sin(targetAngle) * orbitRadius;
+    const angleToPlayer = Phaser.Math.Angle.Between(px, py, ex, ey);
+    const targetAngle = angleToPlayer + 0.04;
+    const tx = px + Math.cos(targetAngle) * orbitR;
+    const ty = py + Math.sin(targetAngle) * orbitR;
 
-    const moveAngle = Phaser.Math.Angle.Between(ex, ey, tx, ty);
-    enemy.sprite.setVelocity(Math.cos(moveAngle) * spd, Math.sin(moveAngle) * spd);
-    enemy.sprite.rotation = Phaser.Math.Angle.Between(ex, ey, px, py) + Math.PI / 2;
+    this._moveTowards(enemy, tx, ty, 0.9);
+    this._lookAt(enemy, px, py);
 
-    if (dist < 300) enemy.tryFire(time, { x: px, y: py });
+    if (dist < 320) enemy.tryFire(time, { x: px, y: py });
   }
 
-  _tacticalAI(enemy, player, time, delta) {
-    const px = player.sprite.x, py = player.sprite.y;
+  _tactical(enemy, px, py, time) {
     const ex = enemy.sprite.x, ey = enemy.sprite.y;
     const dist = Phaser.Math.Distance.Between(ex, ey, px, py);
-    const spd = enemy.speed;
+    const pref = 200;
 
-    const preferDist = 200;
-    if (dist > preferDist + 40) {
-      const a = Phaser.Math.Angle.Between(ex, ey, px, py);
-      enemy.sprite.setVelocity(Math.cos(a) * spd, Math.sin(a) * spd);
-    } else if (dist < preferDist - 40) {
-      const a = Phaser.Math.Angle.Between(px, py, ex, ey);
-      enemy.sprite.setVelocity(Math.cos(a) * spd * 0.7, Math.sin(a) * spd * 0.7);
+    if (dist > pref + 50) {
+      this._moveTowards(enemy, px, py, 0.8);
+    } else if (dist < pref - 50) {
+      // Отступает
+      const angle = Phaser.Math.Angle.Between(px, py, ex, ey);
+      enemy.sprite.setVelocity(Math.cos(angle) * enemy.speed * 0.7, Math.sin(angle) * enemy.speed * 0.7);
     } else {
       // Стрейф
-      const a = Phaser.Math.Angle.Between(ex, ey, px, py) + Math.PI / 2;
-      enemy.sprite.setVelocity(Math.cos(a) * spd * 0.5, Math.sin(a) * spd * 0.5);
+      const perpAngle = Phaser.Math.Angle.Between(ex, ey, px, py) + Math.PI / 2;
+      enemy.sprite.setVelocity(Math.cos(perpAngle) * enemy.speed * 0.5, Math.sin(perpAngle) * enemy.speed * 0.5);
     }
+    this._lookAt(enemy, px, py);
+    if (dist < 400) enemy.tryFire(time, { x: px, y: py });
+  }
 
-    enemy.sprite.rotation = Phaser.Math.Angle.Between(ex, ey, px, py) + Math.PI / 2;
+  _defensive(enemy, px, py, time) {
+    const ex = enemy.sprite.x, ey = enemy.sprite.y;
+    const dist = Phaser.Math.Distance.Between(ex, ey, px, py);
+
+    if (dist < 140) {
+      this._moveTowards(enemy, px + 200, py, 0.7);
+    } else {
+      enemy.sprite.setVelocity(0, 30);
+    }
+    this._lookAt(enemy, px, py);
     if (dist < 380) enemy.tryFire(time, { x: px, y: py });
   }
 
-  _defensiveAI(enemy, player, time, delta) {
-    const px = player.sprite.x, py = player.sprite.y;
+  _boss(enemy, px, py, time, delta) {
     const ex = enemy.sprite.x, ey = enemy.sprite.y;
     const dist = Phaser.Math.Distance.Between(ex, ey, px, py);
-    const spd = enemy.speed;
+    const W = this.scene.scale.width;
 
-    if (dist < 150) {
-      const a = Phaser.Math.Angle.Between(px, py, ex, ey);
-      enemy.sprite.setVelocity(Math.cos(a) * spd, Math.sin(a) * spd);
+    // Плавный вход
+    if (ey < 110) {
+      enemy.sprite.setVelocity(0, enemy.speed * 0.6);
+    } else if (dist > 280) {
+      this._moveTowards(enemy, px, py, 0.45);
     } else {
-      enemy.sprite.setVelocity(0, 20);
-    }
-    enemy.sprite.rotation = Phaser.Math.Angle.Between(ex, ey, px, py) + Math.PI / 2;
-    if (dist < 350) enemy.tryFire(time, { x: px, y: py });
-  }
-
-  _bossAI(enemy, player, time, delta) {
-    const px = player.sprite.x, py = player.sprite.y;
-    const ex = enemy.sprite.x, ey = enemy.sprite.y;
-    const dist = Phaser.Math.Distance.Between(ex, ey, px, py);
-    const spd = enemy.speed;
-
-    // Входной маневр
-    if (ey < 100) {
-      enemy.sprite.setVelocity(0, spd);
-    } else if (dist > 260) {
-      const a = Phaser.Math.Angle.Between(ex, ey, px, py);
-      enemy.sprite.setVelocity(Math.cos(a) * spd * 0.5, Math.sin(a) * spd * 0.5);
-    } else {
-      // Медленно ходит из стороны в сторону
-      const t = this.scene.time.now * 0.001;
-      enemy.sprite.setVelocity(Math.cos(t) * spd * 0.7, Math.sin(t * 0.5) * spd * 0.3);
+      // Боевой паттерн — синусоидальное движение
+      const t = time * 0.0008;
+      const sweepX = px + Math.sin(t * 1.2) * 140;
+      const sweepY = Math.min(Math.max(py - 180, 80), 300);
+      this._moveTowards(enemy, sweepX, sweepY, 0.55);
     }
 
-    enemy.sprite.rotation = Phaser.Math.Angle.Between(ex, ey, px, py) + Math.PI / 2;
-
-    // Все оружия стреляют
+    this._lookAt(enemy, px, py);
     enemy.tryFire(time, { x: px, y: py });
 
-    // HP босса на экране
-    if (this.scene.bossHPBar && this.scene.bossEntity === enemy) {
-      const W = this.scene.scale.width;
-      const pct = enemy.hp / enemy.maxHp;
-      this.scene.bossHPBar.clear()
-        .fillStyle(0x330000).fillRect(10, this.scene.scale.height - 18, W - 20, 10)
-        .fillStyle(0xff2200).fillRect(10, this.scene.scale.height - 18, (W - 20) * pct, 10)
-        .lineStyle(1, 0xff4444).strokeRect(10, this.scene.scale.height - 18, W - 20, 10);
+    // Фаза 2 — ниже 50% HP атакует агрессивней
+    if (enemy.hp < enemy.maxHp * 0.5 && dist > 100) {
+      this._moveTowards(enemy, px, py, 0.75);
+    }
+  }
+
+  _clampEnemy(enemy) {
+    const W = this.scene.scale.width, H = this.scene.scale.height;
+    const pad = 15;
+    const spr = enemy.sprite;
+    if (spr.x < -60 || spr.x > W + 60 || spr.y > H + 60) {
+      spr.x = Phaser.Math.Clamp(spr.x, pad, W - pad);
+      spr.y = Phaser.Math.Clamp(spr.y, -40, H - 100);
     }
   }
 }
